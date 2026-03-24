@@ -11,7 +11,7 @@
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void processInput(GLFWwindow* window);
-// «Å§i
+// å®£å‘Š
 namespace cube {
     extern std::array<short, 256> const kCubeEdges;
     extern std::array<std::array<short, 16>, 256> const kCubeTriangles;
@@ -28,40 +28,112 @@ GLFWwindow* window;
 bool firstMouse = true;
 Shader lightingShader;
 Shader volumeShader;
+Shader histogramShader;
 float deltaTime = 0.05f;
-int isoValue = 180;
+int isoValue = 80;
 bool needUpdate = false;
-// ¦b¥ş°ìÅÜ¼Æ°Ï·s¼W
-int isoValue2 = 80; // °²³]²Ä¤G­Ó­È¬O 120
+// åœ¨å…¨åŸŸè®Šæ•¸å€æ–°å¢
+bool two_isovalues = false;
+int isoValue2 = 80; // å‡è¨­ç¬¬äºŒå€‹å€¼æ˜¯ 120
 unsigned int isoVAO2, isoVBO2;
-
-
+unsigned int histVBO, histVAO = 0;
 struct Vertex {
     glm::vec3 Position;
     glm::vec3 Normal;
 };
+// å…¨åŸŸè®Šæ•¸
+std::vector<int> triangleCounts(256, 0);
+
+void calculateHistogram(unsigned char* data, int w, int h, int d) {
+    // 1. åˆå§‹åŒ–æ­¸é›¶
+    std::fill(triangleCounts.begin(), triangleCounts.end(), 0);
+
+    std::cout << "Calculating Histogram... Please wait." << std::endl;
+
+    // 2. éæ­·æ¯ä¸€å€‹ Grid Cell (èˆ‡ Marching Cubes éæ­·æ–¹å¼ç›¸åŒ)
+    for (int z = 0; z < d - 1; z++) {
+        for (int y = 0; y < h - 1; y++) {
+            for (int x = 0; x < w - 1; x++) {
+
+                float val[8];
+                float minVal = 255.0f;
+                float maxVal = 0.0f;
+
+                // å–å¾— 8 å€‹é ‚é»çš„æ•¸å€¼ä¸¦æ‰¾å‡ºæ¥µå€¼
+                int cornerIdx[8][3] = {
+                    {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0},
+                    {0,0,1}, {1,0,1}, {1,1,1}, {0,1,1}
+                };
+
+                for (int i = 0; i < 8; i++) {
+                    size_t index = (size_t)(z + cornerIdx[i][2]) * (h * w) +
+                        (size_t)(y + cornerIdx[i][1]) * w +
+                        (x + cornerIdx[i][0]);
+                    float v = (float)data[index * 4 + 3];
+                    val[i] = v;
+                    if (v < minVal) minVal = v;
+                    if (v > maxVal) maxVal = v;
+                }
+
+                // 3. é ä¼°ä¸‰è§’å½¢æ•¸é‡
+                // ç‚ºäº†ç°¡åŒ–ï¼Œæˆ‘å€‘éæ­·é€™ 8 å€‹é»æ¶µè“‹çš„ Iso ç¯„åœ
+                // åªæœ‰ç•¶ isoValue ä»‹æ–¼ [minVal, maxVal] ä¹‹é–“ï¼Œé€™å€‹ Cell æ‰æœƒæœ‰é¢
+                int start = (int)std::floor(minVal);
+                int end = (int)std::ceil(maxVal);
+
+                for (int iso = start; iso <= end && iso < 256; iso++) {
+                    if (iso < 0) continue;
+
+                    // è¨ˆç®—åœ¨è©² iso ä¸‹çš„ cubeIndex
+                    int cubeIndex = 0;
+                    if (val[0] >= iso) cubeIndex |= 1;
+                    if (val[1] >= iso) cubeIndex |= 2;
+                    if (val[2] >= iso) cubeIndex |= 4;
+                    if (val[3] >= iso) cubeIndex |= 8;
+                    if (val[4] >= iso) cubeIndex |= 16;
+                    if (val[5] >= iso) cubeIndex |= 32;
+                    if (val[6] >= iso) cubeIndex |= 64;
+                    if (val[7] >= iso) cubeIndex |= 128;
+
+                    // æŸ¥è¡¨ï¼šé€™å€‹ index æœƒç”¢ç”Ÿå¤šå°‘å€‹ä¸‰è§’å½¢ï¼Ÿ
+                    // æˆ‘å€‘å¯ä»¥çœ‹ kCubeTriangles è£¡é¢æœ‰å¤šå°‘çµ„é -1 çš„å€¼
+                    int triInCell = 0;
+                    for (int t = 0; t < 16; t += 3) {
+                        if (cube::kCubeTriangles[cubeIndex][t] == -1) break;
+                        triInCell++;
+                    }
+
+                    if (triInCell > 0) {
+                        triangleCounts[iso] += triInCell;
+                    }
+                }
+            }
+        }
+    }
+    std::cout << "Histogram calculation finished!" << std::endl;
+}
 glm::vec3 getNormal(unsigned char* data, int x, int y, int z, int w, int h, int d) {
     float nx, ny, nz;
 
-    // X ¤è¦V±è«× (Central Difference)
+    // X æ–¹å‘æ¢¯åº¦ (Central Difference)
     if (x > 0 && x < w - 1)
         nx = (float)data[(z * h * w + y * w + (x + 1)) * 4 + 3] - (float)data[(z * h * w + y * w + (x - 1)) * 4 + 3];
     else
         nx = 0.0f;
 
-    // Y ¤è¦V±è«×
+    // Y æ–¹å‘æ¢¯åº¦
     if (y > 0 && y < h - 1)
         ny = (float)data[(z * h * w + (y + 1) * w + x) * 4 + 3] - (float)data[(z * h * w + (y - 1) * w + x) * 4 + 3];
     else
         ny = 0.0f;
 
-    // Z ¤è¦V±è«×
+    // Z æ–¹å‘æ¢¯åº¦
     if (z > 0 && z < d - 1)
         nz = (float)data[((z + 1) * h * w + y * w + x) * 4 + 3] - (float)data[((z - 1) * h * w + y * w + x) * 4 + 3];
     else
         nz = 0.0f;
 
-    // ª`·N¡G¦b OpenGL ¤¤³q±`¨ú­t±è«×§@¬°ªk½u¡A¨Ã³æ¦ì¤Æ
+    // æ³¨æ„ï¼šåœ¨ OpenGL ä¸­é€šå¸¸å–è² æ¢¯åº¦ä½œç‚ºæ³•ç·šï¼Œä¸¦å–®ä½åŒ–
     return glm::normalize(glm::vec3(-nx, -ny, -nz));
 }
 unsigned char* loadRawFile(const std::string& filename, int width, int height, int depth) {
@@ -89,7 +161,7 @@ unsigned char* loadRawFile(const std::string& filename, int width, int height, i
 
     return new_data;
 }
-// ½u©Ê´¡­È­pºâ¥æÂI¦ì¸m
+// ç·šæ€§æ’å€¼è¨ˆç®—äº¤é»ä½ç½®
 glm::vec3 interpolate(glm::vec3 p1, glm::vec3 p2, float val1, float val2, float iso) {
     if (abs(iso - val1) < 0.00001f) return p1;
     if (abs(iso - val2) < 0.00001f) return p2;
@@ -131,7 +203,8 @@ void ini() {
     glEnable(GL_DEPTH_TEST);
     Shader* newshader = new Shader("color.vs", "color.fs");
     lightingShader = *newshader;
-
+    newshader = new Shader("histogram.vs", "histogram.fs");
+    histogramShader = *newshader;
     //newshader = new Shader("volume.vs", "volume.fs");
     //volumeShader = *newshader;
 
@@ -140,32 +213,32 @@ void ini() {
 }
 #include <array>
 
-// «Å§i¥~³¡ Table
+// å®£å‘Šå¤–éƒ¨ Table
 extern std::array<short, 256> kCubeEdges;
 extern std::array<std::array<short, 16>, 256> const kCubeTriangles;
 
 std::vector<Vertex> generateIsosurface(unsigned char* data, int w, int h, int d, float isoValue) {
     std::vector<Vertex> vertices;
 
-    // ©w¸q¥ß¤èÅé 12 ±øÃä³s±µªº³»ÂI¯Á¤Ş (Marching Cubes ¼Ğ·Ç)
+    // å®šç¾©ç«‹æ–¹é«” 12 æ¢é‚Šé€£æ¥çš„é ‚é»ç´¢å¼• (Marching Cubes æ¨™æº–)
     const int edgeToVertices[12][2] = {
         {0,1}, {1,2}, {2,3}, {3,0},
         {4,5}, {5,6}, {6,7}, {7,4},
         {0,4}, {1,5}, {2,6}, {3,7}
     };
 
-    // ¹M¾ú¨C¤@­Ó Grid Cell
+    // éæ­·æ¯ä¸€å€‹ Grid Cell
     for (int z = 0; z < d - 1; z++) {
         for (int y = 0; y < h - 1; y++) {
             for (int x = 0; x < w - 1; x++) {
 
-                // 1. ¨ú±o 8 ­Ó³»ÂIªº®y¼Ğ»P¼Æ­È
+                // 1. å–å¾— 8 å€‹é ‚é»çš„åº§æ¨™èˆ‡æ•¸å€¼
                 glm::vec3 p[8];
                 float val[8];
-                // ³o¸Ìªº cornerIdx ¶¶§Ç¥²¶·ÄY®æ¹ïÀ³ Table ©w¸q
+                // é€™è£¡çš„ cornerIdx é †åºå¿…é ˆåš´æ ¼å°æ‡‰ Table å®šç¾©
                     int cornerIdx[8][3] = {
-                    {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0}, // ©³­± (z=0) ¥|­ÓÂI¡A°f®É°w
-                    {0,0,1}, {1,0,1}, {1,1,1}, {0,1,1}  // ³»­± (z=1) ¥|­ÓÂI¡A°f®É°w
+                    {0,0,0}, {1,0,0}, {1,1,0}, {0,1,0}, // åº•é¢ (z=0) å››å€‹é»ï¼Œé€†æ™‚é‡
+                    {0,0,1}, {1,0,1}, {1,1,1}, {0,1,1}  // é ‚é¢ (z=1) å››å€‹é»ï¼Œé€†æ™‚é‡
                     };
 
                     for (int i = 0; i < 8; i++) {
@@ -174,13 +247,13 @@ std::vector<Vertex> generateIsosurface(unsigned char* data, int w, int h, int d,
                         int cz = z + cornerIdx[i][2];
                         p[i] = glm::vec3((float)cx, (float)cy, (float)cz);
 
-                        // ³o¸Ì³Ì¦MÀI¡I¥²¶·½T«O¶¶§Ç»PÅª¨ú®É¤@­P
-                        // ®Ú¾Ú±`¥Îªº RAW ®æ¦¡ (X ¼W¥[³Ì§Ö¡A±µµÛ Y¡A³Ì«á Z)
+                        // é€™è£¡æœ€å±éšªï¼å¿…é ˆç¢ºä¿é †åºèˆ‡è®€å–æ™‚ä¸€è‡´
+                        // æ ¹æ“šå¸¸ç”¨çš„ RAW æ ¼å¼ (X å¢åŠ æœ€å¿«ï¼Œæ¥è‘— Yï¼Œæœ€å¾Œ Z)
                         size_t index = (size_t)cz * (h * w) + (size_t)cy * w + cx;
                         val[i] = (float)data[index * 4 + 3];
                     }
 
-                // 2. ­pºâ Table Index (­ş¨ÇÂI¦bªí­±¤º)
+                // 2. è¨ˆç®— Table Index (å“ªäº›é»åœ¨è¡¨é¢å…§)
                 int cubeIndex = 0;
                 if (val[0] >= isoValue) cubeIndex |= 1;
                 if (val[1] >= isoValue) cubeIndex |= 2;
@@ -193,28 +266,28 @@ std::vector<Vertex> generateIsosurface(unsigned char* data, int w, int h, int d,
 
                 if (cube::kCubeEdges[cubeIndex] == 0) continue;
 
-                // ª`·N³o¸Ì¡G¨Ï¥Î cube::kCubeTriangles
+                // æ³¨æ„é€™è£¡ï¼šä½¿ç”¨ cube::kCubeTriangles
                 for (int i = 0; cube::kCubeTriangles[cubeIndex][i] != -1; i += 3) {
-                    // ¦b generateIsosurface ªº³»ÂI´`Àô¤¤¡G
+                    // åœ¨ generateIsosurface çš„é ‚é»å¾ªç’°ä¸­ï¼š
                     for (int j = 0; j < 3; j++) {
                         int edgeIdx = cube::kCubeTriangles[cubeIndex][i + j];
                         int v1_idx = edgeToVertices[edgeIdx][0];
                         int v2_idx = edgeToVertices[edgeIdx][1];
 
-                        // 1. ­pºâ´¡­È«áªº®y¼Ğ
+                        // 1. è¨ˆç®—æ’å€¼å¾Œçš„åº§æ¨™
                         glm::vec3 pos = interpolate(p[v1_idx], p[v2_idx], val[v1_idx], val[v2_idx], isoValue);
 
-                        // 2. ­pºâ¨â­ÓºİÂIªº±è«×ªk¦V¶q
+                        // 2. è¨ˆç®—å…©å€‹ç«¯é»çš„æ¢¯åº¦æ³•å‘é‡
                         glm::vec3 n1 = getNormal(data, (int)p[v1_idx].x, (int)p[v1_idx].y, (int)p[v1_idx].z, w, h, d);
                         glm::vec3 n2 = getNormal(data, (int)p[v2_idx].x, (int)p[v2_idx].y, (int)p[v2_idx].z, w, h, d);
 
-                        // 3. ¹ïªk¦V¶q¤]¶i¦æ½u©Ê´¡­È (©Î¬Oª½±µ¨ú pos ³Bªº±è«×)
+                        // 3. å°æ³•å‘é‡ä¹Ÿé€²è¡Œç·šæ€§æ’å€¼ (æˆ–æ˜¯ç›´æ¥å– pos è™•çš„æ¢¯åº¦)
                         float mu = (isoValue - val[v1_idx]) / (val[v2_idx] - val[v1_idx]);
                         glm::vec3 normal = glm::normalize(n1 + mu * (n2 - n1));
 
                         Vertex v;
                         v.Position = pos;
-                        v.Normal = normal; // ²{¦b¦³¥¿½Tªºªk¦V¶q¤F¡I
+                        v.Normal = normal; // ç¾åœ¨æœ‰æ­£ç¢ºçš„æ³•å‘é‡äº†ï¼
                         vertices.push_back(v);
                     }
                 }
@@ -224,38 +297,90 @@ std::vector<Vertex> generateIsosurface(unsigned char* data, int w, int h, int d,
     return vertices;
 }
 
+void drawHistogram(const std::vector<int>& counts, int currentIso) {
+    if (histVAO == 0) {
+        glGenVertexArrays(1, &histVAO);
+        glGenBuffers(1, &histVBO);
+    }
+    glBindVertexArray(histVAO);
+    std::vector<float> vertices;
+    int maxCount = 0;
+    for (int c : counts) if (c > maxCount) maxCount = c;
+
+    for (int i = 0; i < 256; i++) {
+        float x = (i / 255.0f) * 2.0f - 1.0f; // æ˜ å°„åˆ° -1 ~ 1
+        float h = (maxCount > 0) ? ((float)counts[i] / maxCount) * 2.0f : 0.0f;
+
+        // æŸ±å­çš„é ‚é» (x, -1) åˆ° (x, -1 + h)
+        vertices.push_back(x); vertices.push_back(-1.0f);
+        vertices.push_back(x); vertices.push_back(-1.0f + h);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, histVBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STREAM_DRAW);
+
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    glDrawArrays(GL_LINES, 0, 512);
+
+    // ç•«æŒ‡ç¤ºç·š
+    std::vector<float> lineVerts;
+    float lineX = (currentIso / 255.0f) * 2.0f - 1.0f;
+    lineVerts.push_back(lineX); lineVerts.push_back(-1.0f);
+    lineVerts.push_back(lineX); lineVerts.push_back(1.0f);
+
+    unsigned int lineVBO;
+    glGenBuffers(1, &lineVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, lineVBO);
+    glBufferData(GL_ARRAY_BUFFER, lineVerts.size() * sizeof(float), lineVerts.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // å¯ä»¥åœ¨ Shader è£¡æ”¹é¡è‰²ï¼Œæˆ–æ˜¯æš«æ™‚ç”¨é€™çµ„
+    glDrawArrays(GL_LINES, 0, 2);
+    glDeleteBuffers(1, &lineVBO);
+
+    glBindVertexArray(0);
+}
 int main() {
     ini();
-
+    
     int res_width = 149, res_height = 208, res_depth = 110;
     
     unsigned char* data;
     data = loadRawFile("engine.raw", res_width, res_height, res_depth);
+    calculateHistogram(data, res_width, res_height, res_depth);
     std::vector<Vertex> isoVertices = generateIsosurface(data, res_width, res_height, res_depth, isoValue);
     std::cout << "Generated Triangles: " << isoVertices.size() / 3 << std::endl;
-    // 2. §ó·s VAO/VBO
+    // 2. æ›´æ–° VAO/VBO
     unsigned int isoVAO, isoVBO;
     glGenVertexArrays(1, &isoVAO);
     glGenBuffers(1, &isoVBO);
     glBindVertexArray(isoVAO);
     glBindBuffer(GL_ARRAY_BUFFER, isoVBO);
-    glBufferData(GL_ARRAY_BUFFER, isoVertices.size() * sizeof(Vertex), &isoVertices[0], GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,
+        isoVertices.size() * sizeof(Vertex),
+        isoVertices.empty() ? nullptr : isoVertices.data(),
+        GL_STATIC_DRAW);
 
-    // ³]©w Attribute (Position & Normal)
+    // è¨­å®š Attribute (Position & Normal)
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, Normal));
-    // --- ¦b¥Í¦¨²Ä¤@²Õ¤§«á¥[¤J ---
+    // --- åœ¨ç”Ÿæˆç¬¬ä¸€çµ„ä¹‹å¾ŒåŠ å…¥ ---
     std::vector<Vertex> isoVertices2 = generateIsosurface(data, res_width, res_height, res_depth, (float)isoValue2);
 
     glGenVertexArrays(1, &isoVAO2);
     glGenBuffers(1, &isoVBO2);
     glBindVertexArray(isoVAO2);
     glBindBuffer(GL_ARRAY_BUFFER, isoVBO2);
-    glBufferData(GL_ARRAY_BUFFER, isoVertices2.size() * sizeof(Vertex), &isoVertices2[0], GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER,
+        isoVertices2.size() * sizeof(Vertex),
+        isoVertices2.empty() ? nullptr : isoVertices2.data(),
+        GL_STATIC_DRAW);
 
-    // ³]©w Attribute (»P²Ä¤@²Õ¬Û¦P)
+    // è¨­å®š Attribute (èˆ‡ç¬¬ä¸€çµ„ç›¸åŒ)
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)0);
     glEnableVertexAttribArray(1);
@@ -263,63 +388,73 @@ int main() {
     
     while (!glfwWindowShouldClose(window)) {
         
-        // §ó·s®É¶¡»P¿é¤J (¦pªG¦³ processInput ¨ç¼Æªº¸Ü)
+        // æ›´æ–°æ™‚é–“èˆ‡è¼¸å…¥ (å¦‚æœæœ‰ processInput å‡½æ•¸çš„è©±)
         float currentFrame = glfwGetTime();
         // deltaTime = currentFrame - lastFrame; ...
         processInput(window);
         if (needUpdate) {
-            // ­«·s­pºâ¨â²Õ
+            // é‡æ–°è¨ˆç®—å…©çµ„
             isoVertices = generateIsosurface(data, res_width, res_height, res_depth, (float)isoValue);
-            isoVertices2 = generateIsosurface(data, res_width, res_height, res_depth, (float)isoValue2);
+            if(two_isovalues)isoVertices2 = generateIsosurface(data, res_width, res_height, res_depth, (float)isoValue2);
 
-            // §ó·s VBO 1
+            // æ›´æ–° VBO 1
             glBindBuffer(GL_ARRAY_BUFFER, isoVBO);
             if (!isoVertices.empty())
                 glBufferData(GL_ARRAY_BUFFER, isoVertices.size() * sizeof(Vertex), isoVertices.data(), GL_STATIC_DRAW);
 
-            // §ó·s VBO 2
-            glBindBuffer(GL_ARRAY_BUFFER, isoVBO2);
-            if (!isoVertices2.empty())
-                glBufferData(GL_ARRAY_BUFFER, isoVertices2.size() * sizeof(Vertex), isoVertices2.data(), GL_STATIC_DRAW);
-
+            // æ›´æ–° VBO 2
+            if (two_isovalues) {
+                glBindBuffer(GL_ARRAY_BUFFER, isoVBO2);
+                if (!isoVertices2.empty())
+                    glBufferData(GL_ARRAY_BUFFER, isoVertices2.size() * sizeof(Vertex), isoVertices2.data(), GL_STATIC_DRAW);
+            }
             std::cout << "Iso1: " << isoValue << " | Iso2: " << isoValue2 << std::endl;
             needUpdate = false;
         }
-        // ²M°£½w½Ä
+        // æ¸…é™¤ç·©è¡
         glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // §ó·s¯x°}
+        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
+
+        // æ›´æ–°çŸ©é™£
         glm::mat4 view = camera.GetViewMatrix();
-        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f); // »·¥­­±½Õ¤j¤@ÂI
+        glm::mat4 projection = glm::perspective(glm::radians(camera.Zoom), (float)SCR_WIDTH / (float)SCR_HEIGHT, 0.1f, 1000.0f); // é å¹³é¢èª¿å¤§ä¸€é»
 
         lightingShader.use();
         lightingShader.setMat4("projection", projection);
         lightingShader.setMat4("view", view);
 
-        // --- ½Õ¾ã¼Ò«¬¦ì¸m»P¤j¤p ---
+        // --- èª¿æ•´æ¨¡å‹ä½ç½®èˆ‡å¤§å° ---
         glm::mat4 model = glm::mat4(1.0f);
-        // ±N¼Ò«¬¤¤¤ß²¾¨ì­ìÂI (110/2, 208/2, 149/2) ¨Ã¤j´TÁY¤p
+        // å°‡æ¨¡å‹ä¸­å¿ƒç§»åˆ°åŸé» (110/2, 208/2, 149/2) ä¸¦å¤§å¹…ç¸®å°
         model = glm::scale(model, glm::vec3(0.05f));
         model = glm::translate(model, glm::vec3(-55.0f, -104.0f, -74.5f));
         lightingShader.setMat4("model", model);
 
-        // °O±o³]©w¥ú·½ (°²³]§Aªº Shader ÅÜ¼Æ¦W¦p¤U)
+        // è¨˜å¾—è¨­å®šå…‰æº (å‡è¨­ä½ çš„ Shader è®Šæ•¸åå¦‚ä¸‹)
         lightingShader.setVec3("lightColor", glm::vec3(1.0f, 1.0f, 1.0f));
-        lightingShader.setVec3("lightPos", camera.Position); // ©Î¬O©T©w¤@­Ó¦ì¸m
+        lightingShader.setVec3("lightPos", camera.Position); // æˆ–æ˜¯å›ºå®šä¸€å€‹ä½ç½®
         lightingShader.setVec3("viewPos", camera.Position);
 
-        // ¦pªG§Aªº shader »İ­n objectColor
-        // Ã¸»s²Ä¤@¼h (¨Ò¦p¡G¾ï¬õ¦â)
+        // å¦‚æœä½ çš„ shader éœ€è¦ objectColor
+        // ç¹ªè£½ç¬¬ä¸€å±¤ (ä¾‹å¦‚ï¼šæ©˜ç´…è‰²)
         lightingShader.setVec3("objectColor", glm::vec3(1.0f, 0.5f, 0.3f));
         glBindVertexArray(isoVAO);
         glDrawArrays(GL_TRIANGLES, 0, isoVertices.size());
-
-        // Ã¸»s²Ä¤G¼h (¨Ò¦p¡G«CÂÅ¦â)
-        lightingShader.setVec3("objectColor", glm::vec3(0.3f, 0.8f, 1.0f));
-        glBindVertexArray(isoVAO2);
-        glDrawArrays(GL_TRIANGLES, 0, isoVertices2.size());
-
+        if (two_isovalues) {
+            // ç¹ªè£½ç¬¬äºŒå±¤ (ä¾‹å¦‚ï¼šé’è—è‰²)
+            lightingShader.setVec3("objectColor", glm::vec3(0.3f, 0.8f, 1.0f));
+            glBindVertexArray(isoVAO2);
+            glDrawArrays(GL_TRIANGLES, 0, isoVertices2.size());
+        }
+        //histogram
+        glDisable(GL_DEPTH_TEST);
+        glViewport(10, 10, 200, 200);
+        histogramShader.use();
+        drawHistogram(triangleCounts, isoValue);
+        glEnable(GL_DEPTH_TEST);
+        glViewport(0, 0, SCR_WIDTH, SCR_HEIGHT);
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -370,17 +505,17 @@ void processInput(GLFWwindow* window)
         camera.ProcessKeyboard(RIGHT, deltaTime);
     static bool upPressed = false;
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS && !upPressed) {
-        isoValue += 5;
+        isoValue += 15;
         if (isoValue > 255) isoValue = 255;
-        needUpdate = true; // ³]¤@­Ó Flag §i¶D¥D°j°é­n­«ºâ
+        needUpdate = true; // è¨­ä¸€å€‹ Flag å‘Šè¨´ä¸»è¿´åœˆè¦é‡ç®—
         upPressed = true;
     }
     if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE) upPressed = false;
 
-    // °»´ú«öÁä¡]´î¤Ö IsoValue¡^
+    // åµæ¸¬æŒ‰éµï¼ˆæ¸›å°‘ IsoValueï¼‰
     static bool downPressed = false;
     if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS && !downPressed) {
-        isoValue -= 5;
+        isoValue -= 15;
         if (isoValue < 0) isoValue = 0;
         needUpdate = true;
         downPressed = true;
